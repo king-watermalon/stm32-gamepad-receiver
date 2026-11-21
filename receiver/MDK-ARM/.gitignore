@@ -1,0 +1,8 @@
+# Keil MDK 编译产物（源码与 .uvprojx 需要提交，这些不要）
+Objects/
+Listings/
+DebugConfig/
+*.uvoptx
+*.dep
+*.bak
+*.scvd
