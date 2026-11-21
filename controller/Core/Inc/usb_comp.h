@@ -4,8 +4,9 @@
   * @brief   USB XInput 游戏手柄（寄存器级实现，Xbox 360 有线手柄兼容）
   ******************************************************************************
   * 设备结构（Windows 免驱）：
-  *   设备 class/subclass/protocol = 0xFF/0x5D/0x01，VID/PID = 045E/028E
-  *   → Windows 用 xusb22.sys 接管，设备名取 iProduct 字符串 = XGDW
+  *   设备 class/subclass/protocol = 0xFF/0x5D/0x01，VID/PID = 1209/0001（pid.codes）
+  *   → 靠微软 OS 描述符声明 compatibleID = XUSB10，Windows 用 xusb22.sys 接管；
+  *     设备名取 iProduct 字符串 = XGDW，与无线接收器一致
   *   → Steam / 只支持 XInput 的游戏直接认，无需 Steam Input 通用手柄映射
   *
   *   接口 0 : EP1 IN  中断 32B（20 字节输入报告）
@@ -13,9 +14,9 @@
   *
   * 硬件前提：PA12(D+) 外接 1.5k 到 3.3V；SYSCLK 72MHz 时 USB=PLL/1.5=48MHz。
   *
-  * ★ 改 VID/PID 前先看 docs/XInput改造说明.md：045E 是微软的 VID，
-  *   只适用于自用/开发板；对外销售必须换成自己申请或 pid.codes 的 VID，
-  *   并改走 USB\MS_COMP_XUSB10 兼容 ID 那条路。
+  * ★ 用真微软 VID 045E/028E 时，xusb22.inf 有该硬件的型号项，Windows 会按 INF
+  *   的描述显示成「Xbox 360 Controller for Windows」，iProduct 被忽略；想让有线
+  *   与无线（接收器）显示同名，必须换成自有 VID/PID 并走 MS_COMP_XUSB10 兼容 ID。
   ******************************************************************************
   */
 

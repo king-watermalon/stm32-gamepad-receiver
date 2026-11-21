@@ -9,10 +9,15 @@
   *   - XInput 设备插上即用，游戏里显示的就是「Xbox 360 手柄」，A/B/X/Y、
   *     十字键、LB/RB、左右摇杆按下位都是原生语义。
   *
-  * 设备结构（Windows 免驱）：
-  *   设备 class/subclass/protocol = 0xFF/0x5D/0x01，VID/PID = 045E/028E
-  *   → Windows 用 xusb22.sys 接管，设备名取 iProduct 字符串 = 「西瓜大王」
-  *
+ * 设备结构（Windows 免驱）：
+ *   设备 class/subclass/protocol = 0xFF/0x5D/0x01，VID/PID = 1209/0001（pid.codes）
+ *   → 靠微软 OS 描述符声明 compatibleID = XUSB10，Windows 用 xusb22.sys 接管；
+ *     设备名取 iProduct 字符串 = 「西瓜大王」（XGDW），与无线接收器完全一致。
+ *   ★ 原来用的是真微软 ID 045E/028E。xusb22.inf 里有它的型号项，Windows 直接
+ *     按 INF 的描述显示成「Xbox 360 Controller for Windows」，iProduct 被忽略，
+ *     于是「有线」和「无线（接收器）」在设备管理器里名字不一样。换成自有
+ *     VID/PID 后显示名才由 iProduct 决定 —— 这是两者同名的唯一办法。
+ *
   *   接口 0 : EP1 IN  中断 32B（20 字节输入报告）
   *            EP1 OUT 中断 32B（振动/LED 下行包，当前直接丢弃）
   *
@@ -102,17 +107,19 @@
 /* -------------------------------------------------------------------------- */
 /* 描述符                                                                     */
 /* -------------------------------------------------------------------------- */
-/* XInput 设备描述符（Xbox 360 有线手柄）
-   ★ 不再是 HID。设备 class/subclass/protocol = 0xFF/0x5D/0x01，
-     Windows 通过硬件 ID USB\VID_045E&PID_028E 加载 xusb22.sys。 */
+/* XInput 设备描述符（Xbox 360 有线手柄协议）
+   ★ 不再是 HID。设备 class/subclass/protocol = 0xFF/0x5D/0x01。
+   ★ VID/PID = 1209/0001（pid.codes）：与接收器相同。xusb22 不是靠硬件 ID 绑的，
+     而是靠下面 s_compat_id 声明的兼容 ID USB\MS_COMP_XUSB10（见 usb_comp.c 里的
+     厂商请求分支）。这样 Windows 显示名取 iProduct，和无线模式一致。 */
 static const uint8_t s_dev_desc[18] =
 {
   0x12, 0x01,               /* bLength, DEVICE */
   0x00, 0x02,               /* bcdUSB 2.00 */
   0xFF, 0x5D, 0x01,         /* class/subclass/protocol = XUSB */
   0x40,                     /* bMaxPacketSize0 = 64 */
-  0x5E, 0x04,               /* VID 0x045E */
-  0x8E, 0x02,               /* PID 0x028E (Xbox 360 Wired Controller) */
+  0x09, 0x12,               /* VID 0x1209 (pid.codes，仅自用) */
+  0x01, 0x00,               /* PID 0x0001 */
   0x14, 0x01,               /* bcdDevice 1.14 */
   0x01, 0x02, 0x03,         /* iManufacturer / iProduct / iSerial */
   0x01                      /* bNumConfigurations */
@@ -145,9 +152,44 @@ static const uint8_t s_str_manu[16] = { 0x10, 0x03,
      方块或空白，用 XGDW 最稳。 */
 static const uint8_t s_str_prod[10] = { 0x0A, 0x03,
                                         'X',0,'G',0,'D',0,'W',0 };
-/* bLength 必须等于数组实际长度（2 + 9 字符 * 2 = 20 = 0x14） */
-static const uint8_t s_str_ser[20]  = { 0x14, 0x03,
+/* bLength 必须等于数组实际长度：2 + 8 字符 * 2 = 18 = 0x12。
+   ★ 原来写成 0x14（= 20，声称 9 个字符）但数组只有 18 字节，属于畸形描述符：
+     主机按 bLength 要 20 字节，实际只收到 18 → 严格实现的驱动会判坏包。 */
+static const uint8_t s_str_ser[18]  = { 0x12, 0x03,
                                         'X',0,'G',0,'D',0,'W',0,'0',0,'0',0,'0',0,'1',0 };
+
+/* ---- 微软 OS 描述符（MS OS 1.0）----------------------------------------
+   ★ 自有 VID/PID 想让 Windows 认成 XInput 手柄，必须走这条路（与接收器同一套）：
+     1) 主机 GET_DESCRIPTOR(STRING, 索引 0xEE) 问“支持微软扩展描述符吗”
+     2) 我们回 s_os_string：签名 MSFT100 + bMS_VendorCode = 1
+     3) 主机发厂商请求 bmRequestType=0xC0 bRequest=1 wIndex=0x0004
+     4) 我们回 s_compat_id，声明接口 0 的 compatibleID = "XUSB10"
+     Windows 于是生成兼容 ID USB\MS_COMP_XUSB10 → xusb22 绑定，XInput 可用。
+     ★ 少了第 4 步，设备管理器里照样是个“Xbox 手柄”，但 XInputGetState 恒返
+       1167（设备在、一个 I/O 都不发），游戏里表现为完全没反应。 */
+static const uint8_t s_os_string[18] =
+{
+  0x12, 0x03,                                     /* bLength=18, STRING */
+  'M',0, 'S',0, 'F',0, 'T',0, '1',0, '0',0, '0',0, /* qwSignature "MSFT100" */
+  0x01,                                           /* bMS_VendorCode = 1 */
+  0x00                                            /* bPad */
+};
+
+static const uint8_t s_compat_id[40] =
+{
+  /* --- 头部 16 字节 --- */
+  0x28, 0x00, 0x00, 0x00,   /* dwLength = 40 */
+  0x00, 0x01,               /* bcdVersion = 1.00 */
+  0x04, 0x00,               /* wIndex = 4（Extended Compat ID） */
+  0x01,                     /* bCount = 1 个功能段 */
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   /* 7 字节保留 */
+  /* --- 功能段 24 字节 --- */
+  0x00,                     /* bFirstInterfaceNumber = 0（XInput 接口） */
+  0x01,                     /* bReserved1 必须为 1（表示用 compatibleID 字段） */
+  'X','U','S','B','1','0',0x00,0x00,          /* compatibleID = "XUSB10" */
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,    /* subCompatibleID 全 0 */
+  0x00,0x00,0x00,0x00,0x00,0x00               /* 6 字节保留 */
+};
 
 /* -------------------------------------------------------------------------- */
 /* 状态                                                                       */
@@ -489,6 +531,7 @@ static void ep0_handle_setup(const uint8_t *st)
           else if (didx == 1u) { p = s_str_manu; len = (uint16_t)sizeof(s_str_manu); }
           else if (didx == 2u) { p = s_str_prod; len = (uint16_t)sizeof(s_str_prod); }
           else if (didx == 3u) { p = s_str_ser;  len = (uint16_t)sizeof(s_str_ser);  }
+          else if (didx == 0xEEu) { p = s_os_string; len = (uint16_t)sizeof(s_os_string); }
           else                 { p = s_str_lang; len = (uint16_t)sizeof(s_str_lang); }
         }
         else
@@ -627,6 +670,23 @@ static void ep0_handle_setup(const uint8_t *st)
       return;
     }
 
+    ep0_stall();
+    return;
+  }
+
+  /* 厂商自定义请求（bmRequestType = 0xC0）
+     ★ 微软 OS 描述符握手：主机读完 0xEE 字符串后，用 bRequest = bMS_VendorCode(1)
+       来取扩展描述符。wIndex = 0x0004 表示要 Extended Compat ID；
+       wIndex 其他值（如 0x0005 Feature）这里不支持，直接 STALL 也不影响枚举。 */
+  if (type == 0x40u)
+  {
+    if (((st[0] & 0x1Fu) == 0u) && (req == 0x01u) && (wIndex == 0x0004u))
+    {
+      uint16_t len = (uint16_t)sizeof(s_compat_id);
+      if (len > wLength) { len = wLength; }
+      ep0_send(s_compat_id, len);
+      return;
+    }
     ep0_stall();
     return;
   }
